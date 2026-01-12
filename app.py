@@ -6,7 +6,7 @@ import json
 import time
 
 # --- SECURE SETUP ---
-st.set_page_config(page_title="Gemini 3 Flash Classifier", layout="wide")
+st.set_page_config(page_title="Idenifying Data Patterns by Mazahar", layout="wide")
 
 # Ensure your secret is named exactly GOOGLE_API_KEY in Streamlit Settings > Secrets
 if "GOOGLE_API_KEY" in st.secrets:
@@ -14,7 +14,7 @@ if "GOOGLE_API_KEY" in st.secrets:
 else:
     st.error("Missing GOOGLE_API_KEY in Streamlit Secrets!")
 
-st.title("🎯 Universal Thematic Agent (Gemini 3 Flash)")
+st.title("🎯 Universal Thematic Agent by Mazahar")
 
 # 1. DEFINE BUCKETS
 st.header("1. Define Your Custom Categories")
