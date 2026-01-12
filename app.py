@@ -1,68 +1,70 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
-import re
+import time
+import json
 
-st.set_page_config(page_title="Enterprise AI Agent", layout="wide")
+# ... (Previous API setup code remains the same) ...
 
-# Secure API Connection
-if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-else:
-    st.sidebar.warning("API Key not found in Secrets. Use sidebar for testing.")
-    api_key = st.sidebar.text_input("Gemini API Key", type="password")
-    if api_key: genai.configure(api_key=api_key)
-
-st.title("🏢 Enterprise Universal Theme Classifier")
-st.markdown("---")
-
-# 1. DYNAMIC BUCKETS & CLEANING
-st.header("1. Define Your Custom Categories")
-num_buckets = st.number_input("How many themes do you need?", 1, 10, 3)
-
-user_buckets = {}
-cols = st.columns(num_buckets)
-for i in range(num_buckets):
-    with cols[i]:
-        b_name = st.text_input(f"Theme {i+1} Name", f"Theme {i+1}")
-        b_desc = st.text_area(f"Paste Definition {i+1}", "Copy/Paste messy text here...")
-        # Cleaning the definition on the fly
-        cleaned_desc = re.sub(r'\s+', ' ', b_desc).strip()
-        user_buckets[b_name] = cleaned_desc
-
-# 2. DYNAMIC DATA LOADING
-st.header("2. Upload Your Dataset")
-file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
-
-if file:
-    df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
-    st.write(f"Loaded {len(df):,} rows.")
+if st.button("🚀 Run Enterprise Analysis") and selected_cols:
+    # 1. CLEANING THE INPUT DATA
+    df['context'] = df[selected_cols].fillna('').agg(' | '.join, axis=1)
     
-    selected_cols = st.multiselect("Which columns should the AI read?", df.columns)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    results = []
+    progress_bar = st.progress(0)
     
-    if st.button("🚀 Run Analysis") and selected_cols:
-        # Pre-processing Data (Cleansing duplicates and nulls)
-        df = df.dropna(subset=selected_cols).drop_duplicates(subset=selected_cols)
-        df['context'] = df[selected_cols].fillna('').agg(' | '.join, axis=1)
+    # BATCHING: 50 rows per API call
+    batch_size = 50
+    for i in range(0, len(df), batch_size):
+        batch = df['context'].iloc[i:i+batch_size].tolist()
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        results = []
-        progress_bar = st.progress(0)
+        # WE ENCLOSE DEFINITIONS IN A CLEAR BLOCK TO HANDLE SPECIAL CHARACTERS
+        prompt = f"""
+        TASK: Categorize the following text list into EXACTLY one of the allowed categories.
         
-        # Batch Processing for Scale (200k rows)
-        batch_size = 50
-        for i in range(0, len(df), batch_size):
-            batch = df['context'].iloc[i:i+batch_size].tolist()
-            prompt = f"Categorize into: {list(user_buckets.keys())}. Rules: {user_buckets}. Return ONLY the name per line: {batch}"
+        ALLOWED CATEGORIES:
+        {list(user_buckets.keys())}
+        
+        DETAILED DEFINITIONS (Ignore formatting/special characters):
+        {json.dumps(user_buckets, indent=2)}
+        
+        OUTPUT RULES:
+        - Return ONLY the category name for each entry.
+        - One category per line.
+        - If unsure, pick the closest match.
+        
+        TEXT ENTRIES TO CATEGORIZE:
+        {batch}
+        """
+        
+        try:
+            response = model.generate_content(prompt)
+            if response.text:
+                # Splitting by newline and cleaning whitespace/special characters from the AI output
+                labels = [l.strip().replace('*', '').replace('-', '') for l in response.text.strip().split('\n') if l.strip()]
+                
+                # Match the AI's answers to our rows
+                batch_results = labels[:len(batch)]
+                
+                # If AI returned too few answers, fill with the first bucket name as a fallback
+                while len(batch_results) < len(batch):
+                    batch_results.append("Uncategorized")
+                
+                results.extend(batch_results)
+            else:
+                results.extend(["Uncategorized"] * len(batch))
+        except Exception as e:
+            # This logs the specific error to your Streamlit dashboard for debugging
+            st.warning(f"Batch {i} had an issue: {e}")
+            results.extend(["Uncategorized"] * len(batch))
             
-            try:
-                response = model.generate_content(prompt)
-                results.extend([l.strip() for l in response.text.strip().split('\n') if l.strip()])
-            except:
-                results.extend(["Error"] * len(batch))
-            progress_bar.progress(min((i + batch_size) / len(df), 1.0))
+        # Update UI
+        progress_bar.progress(min((i + batch_size) / len(df), 1.0))
+        time.sleep(1) # Prevents rate-limit 'Errors' on free tier
 
-        df['AI_Theme'] = results[:len(df)]
-        st.success("Analysis Complete!")
-        st.bar_chart(df['AI_Theme'].value_counts())
-        st.download_button("Download Analyzed CSV", df.to_csv(index=False), "results.csv")
+    # Final result mapping
+    df['AI_Result'] = results[:len(df)]
+    st.success("Analysis Complete!")
+    st.bar_chart(df['AI_Result'].value_counts())
+    st.download_button("Download CSV", df.to_csv(index=False), "results.csv")
