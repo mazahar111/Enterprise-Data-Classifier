@@ -1,94 +1,88 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import json
 import time
+import io
 
 # --- SECURE API SETUP ---
-# Ensure your key is in Streamlit Dashboard > Settings > Secrets
+# Update this in Streamlit Dashboard > Settings > Secrets: GOOGLE_API_KEY = "AIza..."
 if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    # Use the new Google Gen AI SDK for Gemini 3
+    client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 else:
     st.error("Missing API Key! Please paste it into the Streamlit Secrets vault.")
 
-st.title("🚀 Advanced Enterprise Multi-Format Classifier by Mazahar")
-st.markdown("Handles 200k+ rows with complex special characters in definitions.")
+st.set_page_config(page_title="Gemini 3 Enterprise Agent", layout="wide")
+st.title("🚀 Gemini 3 Flash: Thematic Classifier")
 
-# --- 1. DYNAMIC BUCKETS (HANDLES ALL SPECIAL CHARACTERS) ---
-st.header("1. Define Your Strategy")
-num_buckets = st.number_input("Number of categories", 1, 10, 3)
+# --- 1. DYNAMIC BUCKETS ---
+st.header("1. Define Your Custom Categories")
+st.info("Tip: You can use symbols like $, (), and quotes in your definitions.")
+num_buckets = st.number_input("How many categories?", 1, 10, 3)
 
 user_buckets = {}
 cols = st.columns(num_buckets)
 for i in range(num_buckets):
     with cols[i]:
-        # Buckets can now safely contain quotes, $, and parentheses
-        b_name = st.text_input(f"Theme {i+1} Name", f"Theme {i+1}", key=f"n{i}")
-        b_desc = st.text_area(f"Detailed Definition {i+1}", key=f"d{i}")
+        b_name = st.text_input(f"Name {i+1}", f"Theme {i+1}", key=f"n{i}")
+        b_desc = st.text_area(f"Definition {i+1}", key=f"d{i}", placeholder="Paste messy text...")
         user_buckets[b_name] = b_desc
 
-# --- 2. MULTI-FORMAT FILE UPLOAD ---
+# --- 2. MULTI-FORMAT UPLOAD ---
 st.header("2. Upload & Map Data")
 file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 if file:
-    # Logic to detect file type and read accordingly
     df = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
     st.write(f"Loaded {len(df):,} rows.")
-    selected_cols = st.multiselect("Select columns for analysis context", df.columns)
+    selected_cols = st.multiselect("Select text columns to analyze", df.columns)
     
-    if st.button("🚀 Start Advanced Analysis") and selected_cols:
-        # Pre-processing: Combine columns into a single context
+    if st.button("🚀 Run Gemini 3 Analysis") and selected_cols:
         df['context'] = df[selected_cols].fillna('').agg(' | '.join, axis=1)
-        
-        model = genai.GenerativeModel('gemini-1.5-flash')
         results = []
-        progress = st.progress(0)
+        progress_bar = st.progress(0)
         
-        # Batching: Process 30 rows at a time for stability
+        # BATCHING: 30 rows per request
         batch_size = 30
         for i in range(0, len(df), batch_size):
             batch = df['context'].iloc[i:i+batch_size].tolist()
             
-            # Use JSON to safely pass special characters to the AI
             prompt = f"""
-            You are a strict data classifier. 
-            CATEGORIES AND DEFINITIONS (JSON Format):
-            {json.dumps(user_buckets, indent=2)}
-            
-            TASK: 
-            Assign each text entry to EXACTLY one category name from the list above.
-            
-            RULES:
-            - Return ONLY the category name.
-            - One category per line.
-            - Match the names exactly as they appear in the JSON keys.
-            
-            TEXTS TO ANALYZE:
-            {batch}
+            TASK: Categorize these texts into: {list(user_buckets.keys())}
+            DEFINITIONS (JSON): {json.dumps(user_buckets)}
+            Return ONLY the bucket name for each, one per line.
+            TEXTS: {batch}
             """
             
-            try:
-                response = model.generate_content(prompt)
-                if response.text:
+            # Retry Loop for Rate Limits
+            success = False
+            retries = 0
+            while not success and retries < 3:
+                try:
+                    response = client.models.generate_content(
+                        model="gemini-3-flash-preview",
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            thinking_config=types.ThinkingConfig(thinking_level="MINIMAL")
+                        )
+                    )
                     labels = [l.strip() for l in response.text.strip().split('\n') if l.strip()]
-                    # Ensure we don't exceed the batch size
                     results.extend(labels[:len(batch)])
-                    
-                    # Fill gaps if AI returns fewer lines than rows
+                    # Pad if AI skipped any
                     while len(results) < (i + len(batch)):
                         results.append("Uncategorized")
-                else:
-                    results.extend(["Uncategorized"] * len(batch))
-            except Exception as e:
-                # If rate-limited (429) or other API issue
-                results.extend(["API_Error"] * len(batch))
+                    success = True
+                except Exception as e:
+                    retries += 1
+                    st.warning(f"Rate limit hit. Waiting 60s to retry batch {i//batch_size + 1}...")
+                    time.sleep(60) # Wait for quota reset
             
-            # MANDATORY 2-SECOND SLEEP to stay within Free Tier limits
-            progress.progress(min((i + batch_size) / len(df), 1.0))
-            time.sleep(2) 
+            progress_bar.progress(min((i + batch_size) / len(df), 1.0))
+            time.sleep(5) # Base delay for Free Tier
 
-        df['AI_Result_Theme'] = results[:len(df)]
+        df['AI_Result'] = results[:len(df)]
         st.success("Analysis Complete!")
-        st.bar_chart(df['AI_Result_Theme'].value_counts())
-        st.download_button("Download Processed CSV", df.to_csv(index=False), "results.csv")
+        st.bar_chart(df['AI_Result'].value_counts())
+        st.download_button("Download Results", df.to_csv(index=False), "results.csv")
