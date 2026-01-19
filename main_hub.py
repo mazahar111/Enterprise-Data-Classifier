@@ -4,8 +4,8 @@ st.set_page_config(page_title="Text Agents by Mazahar", layout="wide")
 
 # Define the pages in the sidebar
 pages = [
-    st.Page("agents/classifier.py", title="Thematic Classifier", icon="🏷️"),
-    st.Page("agents/analyzer.py", title="Pattern Analyzer", icon="🧩")
+    st.Page("classifier.py", title="Thematic Classifier", icon="🏷️"),
+    st.Page("analyzer.py", title="Pattern Analyzer", icon="🧩")
 ]
 
 pg = st.navigation(pages)
